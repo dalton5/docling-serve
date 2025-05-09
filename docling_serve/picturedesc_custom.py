@@ -1,9 +1,13 @@
+import base64
+from io import BytesIO
 import os
-from pydantic import BaseModel, Field
+from pathlib import Path
+from urllib.parse import unquote
+from pydantic import AnyUrl, BaseModel, Field
 import requests
 import json
 from collections.abc import Iterable
-from typing import Any
+from typing import Any, Optional, Union
 from docling.datamodel.pipeline_options import PdfPipelineOptions
 from docling.datamodel.pipeline_options import PdfPipelineOptions
 from docling.models.base_model import BaseEnrichmentModel
@@ -11,15 +15,19 @@ from docling.pipeline.standard_pdf_pipeline import StandardPdfPipeline
 from docling_core.types.doc import (
     DoclingDocument,
     NodeItem,
-    PictureItem,
+    PictureItem, 
 )
+from docling_core.types.doc.base import (
+    Size
+)
+from PIL import Image as PILImage
 
 from docling_core.types.doc.document import (
     PictureDescriptionData)
 
 class CustomPictureDescriptionConfig(BaseModel):
     model: str = Field(default_factory=lambda: os.getenv("OPENROUTER_MODEL_PICT_DESC", "default-model"))
-    prompt: str = Field(default_factory=lambda: os.getenv("OPENROUTER_MODEL_PICT_DESC_PROMPT", "Describe the image."))
+    prompt: str = ''
 
 class CustomPictureDescriptionPipelineOptions(PdfPipelineOptions):
     custom_picture_description: CustomPictureDescriptionConfig = Field(
@@ -32,7 +40,8 @@ class CustomPictureDescriptionEnrichmentModel(BaseEnrichmentModel):
         self.prompt = prompt
 
     def is_processable(self, doc: DoclingDocument, element: NodeItem) -> bool:
-        return self.enabled and isinstance(element, PictureItem)
+        return self.enabled  and isinstance(element, PictureItem)
+
 
     def __call__(
         self, doc: DoclingDocument, element_batch: Iterable[NodeItem]
@@ -40,26 +49,28 @@ class CustomPictureDescriptionEnrichmentModel(BaseEnrichmentModel):
         if not self.enabled:
             return
 
+        for page_no, page  in doc.pages.items():
+            if page.image and page.image.uri:
+                page.image.mimetype= self.call_openrouter(page.image.uri.path, self.prompt) #workarround could not stup a new property
+
         for element in element_batch:
-            assert isinstance(element, PictureItem)
-
-            # uncomment this to interactively visualize the image
-            # element.get_image(doc).show()
-
-            image_url = element.image.uri.path
-            description = self.call_openrouter(image_url, self.prompt)
-            element.annotations.append(
-                PictureDescriptionData(
-                    text=description,
-                    provenance='custom_picture_description',
-                )
-            )
+            image_url, description = None, 'None'
+            if isinstance(element, PictureItem):
+                    image_url = element.image.uri.path
+                    description = self.call_openrouter(image_url, self.prompt)
+                    element.annotations.append(
+                        PictureDescriptionData(
+                            text=description,
+                            provenance='custom_picture_description',
+                        )
+                    )
 
             yield element
 
 
     @staticmethod
     def call_openrouter(image_url: str, prompt) -> str:
+        return "description"  # Placeholder for the actual description
         apikey=os.getenv("OPENROUTER_API_KEY")
         response = requests.post(
             url="https://openrouter.ai/api/v1/chat/completions",
@@ -95,12 +106,13 @@ class CustomPictureDescriptionPipeline(StandardPdfPipeline):
         super().__init__(pipeline_options)
         self.pipeline_options: CustomPictureDescriptionPipeline
 
-        self.enrichment_pipe = [
+        self.enrichment_pipe.append(
             CustomPictureDescriptionEnrichmentModel(
-                enabled=pipeline_options.custom_picture_description!=None, 
+                enabled=pipeline_options.generate_page_images or pipeline_options.generate_picture_images, 
                 prompt=pipeline_options.custom_picture_description.prompt
-            )
-        ]
+            ))
+        
+        print(f"CustomPictureDescriptionPipeline initialized with options: {self.enrichment_pipe}")
 
     @classmethod
     def get_default_options(cls) -> CustomPictureDescriptionPipelineOptions:

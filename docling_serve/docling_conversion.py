@@ -263,6 +263,7 @@ def convert_documents(
     options: ConvertDocumentsOptions,
     headers: Optional[dict[str, Any]] = None,
 ):
+    
     pdf_format_option = get_pdf_pipeline_opts(options)
     converter = get_converter(pdf_format_option)
     results: Iterator[ConversionResult] = converter.convert_all(
@@ -274,3 +275,70 @@ def convert_documents(
     )
 
     return results
+
+def convert_to_pdf(input_path: str, output_path: str = None):
+    input_path = Path(input_path)
+    if not input_path.exists():
+        raise FileNotFoundError(f"{input_path} not found")
+
+    if output_path is None:
+        output_path = input_path.with_suffix(".pdf")
+    else:
+        output_path = Path(output_path)
+
+    ext = input_path.suffix.lower()
+
+    try:
+        if ext == ".docx":
+            convert_docx(str(input_path), str(output_path))
+
+        elif ext in [".doc", ".odt", ".ppt", ".xls", ".xlsx", ".rtf"]:
+            subprocess.run([
+                "libreoffice", "--headless", "--convert-to", "pdf",
+                "--outdir", str(output_path.parent),
+                str(input_path)
+            ], check=True)
+
+        elif ext == ".md":
+            import markdown
+            html = markdown.markdown(input_path.read_text(encoding="utf-8"))
+            HTML(string=html).write_pdf(str(output_path))
+
+        elif ext in [".txt"]:
+            text = input_path.read_text(encoding="utf-8")
+            html = f"<pre>{text}</pre>"
+            HTML(string=html).write_pdf(str(output_path))
+
+        elif ext == ".json":
+            json_text = json.dumps(json.load(open(input_path)), indent=2)
+            html = f"<pre>{json_text}</pre>"
+            HTML(string=html).write_pdf(str(output_path))
+
+        elif ext == ".html":
+            HTML(filename=str(input_path)).write_pdf(str(output_path))
+
+        elif ext == ".epub":
+            subprocess.run([
+                "ebook-convert", str(input_path), str(output_path)
+            ], check=True)
+
+        elif ext in [".jpg", ".jpeg", ".png", ".bmp", ".tiff"]:
+            image = Image.open(input_path).convert("RGB")
+            image.save(output_path, "PDF", resolution=100.0)
+
+        elif ext == ".pdf":
+            shutil.copy(str(input_path), str(output_path))
+
+        elif ext == ".dwg":
+            raise NotImplementedError("DWG conversion requires AutoCAD or third-party tools not available in open source.")
+
+        elif ext in [".fmp12", ".fp7"]:
+            raise NotImplementedError("FileMaker files must be exported as PDF manually or via FileMaker scripting.")
+
+        else:
+            raise ValueError(f"Unsupported file type: {ext}")
+
+    except Exception as e:
+        raise RuntimeError(f"Conversion failed for {input_path}: {e}")
+
+    return str(output_path)
