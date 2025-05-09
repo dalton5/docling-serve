@@ -1,7 +1,8 @@
 # Define the input options for the API
-from typing import Annotated, Any, Optional
+import json
+from typing import Annotated, Any, Literal, Optional
 
-from pydantic import AnyUrl, BaseModel, Field, model_validator
+from pydantic import AnyUrl, BaseModel, Field, Json, model_validator
 from typing_extensions import Self
 
 from docling.datamodel.base_models import InputFormat, OutputFormat
@@ -20,6 +21,7 @@ from docling.datamodel.settings import (
 from docling.models.factories import get_ocr_factory
 from docling_core.types.doc import ImageRefMode
 
+from docling_serve.picturedesc_custom import CustomPictureDescriptionConfig, CustomPictureDescriptionPipelineOptions
 from docling_serve.settings import docling_serve_settings
 
 ocr_factory = get_ocr_factory(
@@ -59,6 +61,15 @@ class PictureDescriptionLocal(BaseModel):
 
 
 class PictureDescriptionApi(BaseModel):
+    kind: Annotated[
+    Literal["api"],
+    Field(
+        default="api",
+        description="The kind of API to use...",
+        examples=["api"]
+    )
+]
+            
     url: Annotated[
         AnyUrl,
         Field(
@@ -288,6 +299,28 @@ class ConvertDocumentsOptions(BaseModel):
         ),
     ] = True
 
+    generate_screenshots: Annotated[
+        bool,
+        Field(
+            description=(
+                "If enabled, images of the pages will be generated. "
+                "Boolean. Optional, defaults to false."
+            ),  
+            examples=[False],
+        ),
+    ] = False
+
+    generate_detailed_pictures: Annotated[
+        bool,
+        Field(
+            description=(
+                "If enabled, images of the pictures will be generated. "
+                "Boolean. Optional, defaults to false."
+            ),      
+            examples=[False],
+        ),
+    ] = False
+
     images_scale: Annotated[
         float,
         Field(
@@ -356,11 +389,28 @@ class ConvertDocumentsOptions(BaseModel):
     ] = None
 
     picture_description_api: Annotated[
-        Optional[PictureDescriptionApi],
+        Optional[str],
         Field(
             description="API details for using a vision-language model in the picture description. This parameter is mutually exclusive with picture_description_local."
         ),
     ] = None
+
+    custom_picture_description: Annotated[
+        Optional[str],
+        Field(
+            description="Custom picture description model. This parameter is mutually exclusive with picture_description_local and picture_description_api."
+        ),
+    ] = None
+
+    def parse_picture_description_api(self):
+        if self.picture_description_api:
+            return PictureDescriptionApi(**json.loads(self.picture_description_api))
+        return None
+    
+    def parse_custom_picture_description(self):
+        if self.custom_picture_description:
+            return CustomPictureDescriptionConfig(**json.loads(self.custom_picture_description))
+        return None
 
     @model_validator(mode="after")
     def picture_description_exclusivity(self) -> Self:

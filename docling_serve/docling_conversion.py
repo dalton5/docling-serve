@@ -34,6 +34,7 @@ from docling_core.types.doc import ImageRefMode
 
 from docling_serve.datamodel.convert import ConvertDocumentsOptions, ocr_factory
 from docling_serve.helper_functions import _to_list_of_strings
+from docling_serve.picturedesc_custom import CustomPictureDescriptionConfig, CustomPictureDescriptionPipeline, CustomPictureDescriptionPipelineOptions
 from docling_serve.settings import docling_serve_settings
 
 _log = logging.getLogger(__name__)
@@ -109,7 +110,7 @@ def _parse_standard_pdf_opts(
         else:
             ocr_options.lang = request.ocr_lang
 
-    pipeline_options = PdfPipelineOptions(
+    pipeline_options = CustomPictureDescriptionPipelineOptions(
         artifacts_path=artifacts_path,
         enable_remote_services=docling_serve_settings.enable_remote_services,
         document_timeout=request.document_timeout,
@@ -120,33 +121,51 @@ def _parse_standard_pdf_opts(
         do_formula_enrichment=request.do_formula_enrichment,
         do_picture_classification=request.do_picture_classification,
         do_picture_description=request.do_picture_description,
+        generate_page_images=request.generate_screenshots,
+        generate_picture_images=request.generate_detailed_pictures,
+        images_scale=request.images_scale if request.images_scale else 1.0,
     )
     pipeline_options.table_structure_options.mode = TableFormerMode(request.table_mode)
 
-    if request.image_export_mode != ImageRefMode.PLACEHOLDER:
-        pipeline_options.generate_page_images = True
-        if request.image_export_mode == ImageRefMode.REFERENCED:
-            pipeline_options.generate_picture_images = True
-        if request.images_scale:
-            pipeline_options.images_scale = request.images_scale
+    # if request.image_export_mode != ImageRefMode.PLACEHOLDER:
+    #     pipeline_options.generate_page_images = True
+    #     if request.image_export_mode == ImageRefMode.REFERENCED :
+    #         pipeline_options.generate_picture_images = True
+    #     if request.image_export_mode == ImageRefMode.EMBEDDED: 
+    #         pipeline_options.generate_picture_images = True
+    #     if request.images_scale:
+    #         pipeline_options.images_scale = request.images_scale
 
-    if request.picture_description_local is not None:
-        pipeline_options.picture_description_options = (
-            PictureDescriptionVlmOptions.model_validate(
-                request.picture_description_local.model_dump()
-            )
-        )
-
-    if request.picture_description_api is not None:
-        pipeline_options.picture_description_options = (
-            PictureDescriptionApiOptions.model_validate(
-                request.picture_description_api.model_dump()
-            )
-        )
     pipeline_options.picture_description_options.picture_area_threshold = (
         request.picture_description_area_threshold
     )
 
+    # if request.picture_description_local is not None:
+    #     pipeline_options.picture_description_options = (
+    #         PictureDescriptionVlmOptions.model_validate(
+    #             request.picture_description_local.model_dump()
+    #         )
+    #     )
+
+    if request.picture_description_api is not None:
+        parsed_api = request.parse_picture_description_api()
+        pdesc = PictureDescriptionApiOptions()
+        pdesc.url = parsed_api.url
+        pdesc.headers = parsed_api.headers
+        pdesc.params= parsed_api.params
+        pdesc.timeout = parsed_api.timeout
+        pdesc.prompt = parsed_api.prompt
+        pipeline_options.picture_description_options = pdesc
+        pipeline_options.enable_remote_services=True
+
+    if request.custom_picture_description is not None:
+        parsed_api = request.parse_custom_picture_description()
+        pipeline_options.custom_picture_description = CustomPictureDescriptionConfig()
+        pipeline_options.custom_picture_description.model = parsed_api.model
+        pipeline_options.custom_picture_description.prompt = parsed_api.prompt
+
+        pipeline_options.enable_remote_services=True
+    
     return pipeline_options
 
 
@@ -221,6 +240,7 @@ def get_pdf_pipeline_opts(
         pipeline_options = _parse_standard_pdf_opts(request, artifacts_path)
         backend = _parse_backend(request)
         pdf_format_option = PdfFormatOption(
+            pipeline_cls=CustomPictureDescriptionPipeline,
             pipeline_options=pipeline_options,
             backend=backend,
         )

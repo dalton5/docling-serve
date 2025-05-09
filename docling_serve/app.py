@@ -7,6 +7,15 @@ from contextlib import asynccontextmanager
 from io import BytesIO
 from typing import Annotated
 
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
+
+openrouter_key = os.getenv("OPENROUTER_API_KEY")
+model = os.getenv("OPENROUTER_MODEL_PICT_DESC")
+
+
 from fastapi import (
     BackgroundTasks,
     Depends,
