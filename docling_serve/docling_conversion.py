@@ -1,11 +1,16 @@
+from io import BytesIO
+import subprocess
 import hashlib
 import json
 import logging
+import shutil
 import sys
 from collections.abc import Iterable, Iterator
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Optional, Union
+import tempfile
+import traceback
+from typing import Any, Generator, Optional, Union
 
 from fastapi import HTTPException
 
@@ -28,6 +33,7 @@ from docling.datamodel.pipeline_options import (
     smoldocling_vlm_conversion_options,
     smoldocling_vlm_mlx_conversion_options,
 )
+from docling.document_converter import DocumentConverter, FormatOption, PdfFormatOption
 from docling.document_converter import DocumentConverter, FormatOption, PdfFormatOption
 from docling.pipeline.vlm_pipeline import VlmPipeline
 from docling_core.types.doc import ImageRefMode
@@ -119,7 +125,7 @@ def _parse_standard_pdf_opts(
         do_table_structure=request.do_table_structure,
         do_code_enrichment=request.do_code_enrichment,
         do_formula_enrichment=request.do_formula_enrichment,
-        do_picture_classification=request.do_picture_classification,
+        do_picture_classification=request.generate_detailed_pictures if request.generate_detailed_pictures else False,
         do_picture_description=request.do_picture_description,
         generate_page_images=request.generate_screenshots,
         generate_picture_images=request.generate_detailed_pictures,
@@ -257,13 +263,81 @@ def get_pdf_pipeline_opts(
 
     return pdf_format_option
 
+SUPPORTED_EXTENSIONS = {
+    ".doc", ".docx",
+    ".xls", ".xlsx",
+    ".ppt", ".pptx",
+    ".odt", ".ods", ".odp",
+    ".rtf", ".txt"
+}
 
+def convert_documents_to_pdfs(
+    documents: Iterable[Union[str, Path, DocumentStream]]
+) -> Generator[Union[str, Path, DocumentStream], None, None]:
+
+    for doc in documents:
+        ext = None
+        input_path = None
+        result_type = type(doc)
+        cleanup = False
+
+        if isinstance(doc, (str, Path)):
+            input_path = Path(doc).resolve()
+            ext = input_path.suffix.lower()
+            if ext not in SUPPORTED_EXTENSIONS or not input_path.exists():
+                yield doc
+                continue
+
+        elif isinstance(doc, DocumentStream):
+            ext = Path(doc.name).suffix.lower()
+            if ext not in SUPPORTED_EXTENSIONS:
+                yield doc
+                continue
+            tmp_dir = tempfile.mkdtemp()
+            input_path = Path(tmp_dir) / doc.name
+            with open(input_path, "wb") as f:
+                f.write(doc.stream.getvalue())
+            cleanup = True
+
+        else:
+            yield doc
+            continue
+
+        output_path = input_path.with_suffix(".pdf")
+
+        try:
+            subprocess.run([
+                "soffice", "--headless", "--convert-to", "pdf",
+                "--outdir", str(input_path.parent),
+                str(input_path)
+            ], check=True)
+
+            if output_path.exists():
+                with open(output_path, "rb") as f:
+                    pdf_content = f.read()
+                    docStream = DocumentStream(stream=BytesIO(pdf_content), name=output_path.name)
+                yield docStream
+            else:
+                yield doc
+
+        except Exception as e:
+            print(f"❌ Error converting {input_path.name if input_path else 'unknown'}: {e}")
+            traceback.print_exc()
+            yield doc
+
+        finally:
+            if cleanup:
+                shutil.rmtree(input_path.parent, ignore_errors=True)
+                
 def convert_documents(
     sources: Iterable[Union[Path, str, DocumentStream]],
     options: ConvertDocumentsOptions,
     headers: Optional[dict[str, Any]] = None,
 ):
     
+    
+    sources = list(convert_documents_to_pdfs(sources))
+
     pdf_format_option = get_pdf_pipeline_opts(options)
     converter = get_converter(pdf_format_option)
     results: Iterator[ConversionResult] = converter.convert_all(
@@ -276,69 +350,69 @@ def convert_documents(
 
     return results
 
-def convert_to_pdf(input_path: str, output_path: str = None):
-    input_path = Path(input_path)
-    if not input_path.exists():
-        raise FileNotFoundError(f"{input_path} not found")
+# def convert_to_pdf(input_path: str, output_path: str = None):
+#     input_path = Path(input_path)
+#     if not input_path.exists():
+#         raise FileNotFoundError(f"{input_path} not found")
 
-    if output_path is None:
-        output_path = input_path.with_suffix(".pdf")
-    else:
-        output_path = Path(output_path)
+#     if output_path is None:
+#         output_path = input_path.with_suffix(".pdf")
+#     else:
+#         output_path = Path(output_path)
 
-    ext = input_path.suffix.lower()
+#     ext = input_path.suffix.lower()
 
-    try:
-        if ext == ".docx":
-            convert_docx(str(input_path), str(output_path))
+#     try:
+#         if ext == ".docx":
+#             convert_docx(str(input_path), str(output_path))
 
-        elif ext in [".doc", ".odt", ".ppt", ".xls", ".xlsx", ".rtf"]:
-            subprocess.run([
-                "libreoffice", "--headless", "--convert-to", "pdf",
-                "--outdir", str(output_path.parent),
-                str(input_path)
-            ], check=True)
+#         elif ext in [".doc", ".odt", ".ppt", ".xls", ".xlsx", ".rtf"]:
+#             subprocess.run([
+#                 "libreoffice", "--headless", "--convert-to", "pdf",
+#                 "--outdir", str(output_path.parent),
+#                 str(input_path)
+#             ], check=True)
 
-        elif ext == ".md":
-            import markdown
-            html = markdown.markdown(input_path.read_text(encoding="utf-8"))
-            HTML(string=html).write_pdf(str(output_path))
+#         elif ext == ".md":
+#             import markdown
+#             html = markdown.markdown(input_path.read_text(encoding="utf-8"))
+#             HTML(string=html).write_pdf(str(output_path))
 
-        elif ext in [".txt"]:
-            text = input_path.read_text(encoding="utf-8")
-            html = f"<pre>{text}</pre>"
-            HTML(string=html).write_pdf(str(output_path))
+#         elif ext in [".txt"]:
+#             text = input_path.read_text(encoding="utf-8")
+#             html = f"<pre>{text}</pre>"
+#             HTML(string=html).write_pdf(str(output_path))
 
-        elif ext == ".json":
-            json_text = json.dumps(json.load(open(input_path)), indent=2)
-            html = f"<pre>{json_text}</pre>"
-            HTML(string=html).write_pdf(str(output_path))
+#         elif ext == ".json":
+#             json_text = json.dumps(json.load(open(input_path)), indent=2)
+#             html = f"<pre>{json_text}</pre>"
+#             HTML(string=html).write_pdf(str(output_path))
 
-        elif ext == ".html":
-            HTML(filename=str(input_path)).write_pdf(str(output_path))
+#         elif ext == ".html":
+#             HTML(filename=str(input_path)).write_pdf(str(output_path))
 
-        elif ext == ".epub":
-            subprocess.run([
-                "ebook-convert", str(input_path), str(output_path)
-            ], check=True)
+#         elif ext == ".epub":
+#             subprocess.run([
+#                 "ebook-convert", str(input_path), str(output_path)
+#             ], check=True)
 
-        elif ext in [".jpg", ".jpeg", ".png", ".bmp", ".tiff"]:
-            image = Image.open(input_path).convert("RGB")
-            image.save(output_path, "PDF", resolution=100.0)
+#         elif ext in [".jpg", ".jpeg", ".png", ".bmp", ".tiff"]:
+#             image = Image.open(input_path).convert("RGB")
+#             image.save(output_path, "PDF", resolution=100.0)
 
-        elif ext == ".pdf":
-            shutil.copy(str(input_path), str(output_path))
+#         elif ext == ".pdf":
+#             shutil.copy(str(input_path), str(output_path))
 
-        elif ext == ".dwg":
-            raise NotImplementedError("DWG conversion requires AutoCAD or third-party tools not available in open source.")
+#         elif ext == ".dwg":
+#             raise NotImplementedError("DWG conversion requires AutoCAD or third-party tools not available in open source.")
 
-        elif ext in [".fmp12", ".fp7"]:
-            raise NotImplementedError("FileMaker files must be exported as PDF manually or via FileMaker scripting.")
+#         elif ext in [".fmp12", ".fp7"]:
+#             raise NotImplementedError("FileMaker files must be exported as PDF manually or via FileMaker scripting.")
 
-        else:
-            raise ValueError(f"Unsupported file type: {ext}")
+#         else:
+#             raise ValueError(f"Unsupported file type: {ext}")
 
-    except Exception as e:
-        raise RuntimeError(f"Conversion failed for {input_path}: {e}")
+#     except Exception as e:
+#         raise RuntimeError(f"Conversion failed for {input_path}: {e}")
 
-    return str(output_path)
+#     return str(output_path)

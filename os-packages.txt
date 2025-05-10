@@ -4,3 +4,5 @@ tesseract-langpack-eng
 leptonica-devel
 libglvnd-glx
 glib2
+libreoffice
+java-11-openjdk-headless

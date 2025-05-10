@@ -1,0 +1,29 @@
+{
+    "name": "docling-dev",
+    "build": {
+      "context": "..",
+      "dockerfile": "../Containerfile"
+    },
+    "runArgs": [
+      "--env", "DOCLING_SERVE_ENABLE_UI=true",
+      "--env", "DOCLING_SERVE_ENABLE_REMOTE_SERVICES=true",
+      "--env", "UVICORN_WORKERS=4",
+      "--env", "OPENROUTER_API_KEY=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",
+      "--env", "OPENROUTER_MODEL_PICT_DESC=google/gemma-3-4b-it",
+      "--env", "DOCLING_SERVE_ARTIFACTS_PATH=/opt/app-root/src/.cache/docling/models",
+      "--env", "DOCLING_SERVE_CORS_ORIGINS=[\"sveltekit-dev\", \"sveltekit-prod\"]",
+      "--mount", "type=volume,source=docling_models,target=/root/.cache/docling/models"
+    ],
+    "ports": [ "5001:5001" ],
+    "remoteUser": "vscode",
+    "postCreateCommand": "pip install -r requirements.txt || true",
+    "customizations": {
+      "vscode": {
+        "extensions": [
+          "ms-python.python",
+          "ms-toolsai.jupyter"
+        ]
+      }
+    }
+  }
+  
